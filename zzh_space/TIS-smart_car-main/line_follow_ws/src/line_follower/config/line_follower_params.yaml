@@ -1,0 +1,234 @@
+line_follower_node:
+  ros__parameters:
+    # image_topic（图像输入话题）：Astra 相机发布的彩色图像，巡线节点从这里读取画面。
+    image_topic: "/camera/color/image_raw"
+    # cmd_vel_topic（普通巡线速度话题）：巡线主节点输出的低优先级速度命令。
+    cmd_vel_topic: "/cmd_vel_follower"
+    # debug_image_topic（调试图像话题）：发布带 ROI、掩码、质心等叠加信息的调试图。
+    debug_image_topic: "line_follower/debug_image"
+    # line_state_topic（巡线状态话题）：发布 tracking、lost、yellow_line_detected 等状态。
+    line_state_topic: "line_follower/track_state"
+
+    # target_speed（目标前进速度，m/s）：正常巡线时希望保持的基础速度。
+    target_speed: 0.25
+    # max_speed（最大前进速度，m/s）：限制普通巡线输出的最高线速度。
+    max_speed: 0.3
+    # min_speed（最小前进速度，m/s）：限制普通巡线输出的最低线速度。
+    min_speed: 0.0
+    # max_yaw_rate（最大转向角速度，rad/s）：限制 angular.z，避免转向过猛。
+    max_yaw_rate: 1.8
+    # kp（比例控制增益）：P controller（比例控制器）参数，越大转向越灵敏，也越容易抖。
+    kp: 2.45
+    # left_turn_ratio（左转增强比例）：左转时对 kp 的额外倍率，用于补偿左右转响应不对称。
+    left_turn_ratio: 1.8
+
+    # roi_top_ratio（ROI 上边界比例）：决定从图像多高的位置开始看线；值越大通常看得越远。
+    roi_top_ratio: 0.35
+    # roi_bottom_ratio（ROI 下边界保留比例）：从图像底部裁掉的比例，0 表示保留到底部。
+    roi_bottom_ratio: 0.00
+    # gaussian_kernel（高斯模糊核大小）：用于降噪，必须为奇数；过大可能让线边缘变糊。
+    gaussian_kernel: 5
+    # binary_threshold（二值化阈值）：灰度图超过该值认为是亮区域，影响白线提取。
+    binary_threshold: 160.0
+    # morph_kernel（形态学核大小）：用于闭运算连接断裂线条，过大可能合并噪声。
+    morph_kernel: 3
+    # morph_iterations（形态学迭代次数）：闭运算执行次数，越大越容易补线，也越可能误连。
+    morph_iterations: 2
+    # min_contour_area（最小轮廓面积）：小于该面积的区域视为噪声，不作为巡线目标。
+    min_contour_area: 2000.0
+    # invert_binary（二值图反转）：用于黑线/白底等场景；当前白线巡线保持 false。
+    invert_binary: false
+    # use_white_filter（启用白线 HSV 过滤）：结合 HSV 颜色条件增强白线识别稳定性。
+    use_white_filter: true
+    # white_h_low（白色最小 Hue 色调）：OpenCV HSV 中 Hue 范围为 0-180，白色通常放宽。
+    white_h_low: 0
+    # white_h_high（白色最大 Hue 色调）：白色通常不限制 Hue，因此设置为 180。
+    white_h_high: 180
+    # white_s_max（白色最大 Saturation 饱和度）：越小越严格，可减少浅蓝/彩色区域误识别。
+    white_s_max: 28
+    # white_v_min（白色最小 Value 亮度）：越大越严格，太大可能在暗光下漏检白线。
+    white_v_min: 108
+
+    # use_yellow_filter（启用黄线检测）：用于停车线识别，触发停车/减速相关逻辑。
+    use_yellow_filter: true
+    # yellow_h_low（黄色最小 Hue 色调）：黄色 HSV 色调下界。
+    yellow_h_low: 20
+    # yellow_h_high（黄色最大 Hue 色调）：黄色 HSV 色调上界。
+    yellow_h_high: 40
+    # yellow_s_min（黄色最小 Saturation 饱和度）：越大越能过滤低饱和度噪声。
+    yellow_s_min: 60
+    # yellow_v_min（黄色最小 Value 亮度）：越大越能过滤暗区域，但暗光下可能漏检。
+    yellow_v_min: 50
+    # yellow_area_ratio_threshold（黄色面积比例阈值）：ROI 中黄色占比超过该值才认为检测到黄线。
+    yellow_area_ratio_threshold: 0.03
+    # yellow_approach_enabled（启用黄线接近减速）：true 时在黄线面积较小时先减速，减少冲过停车线的概率。
+    yellow_approach_enabled: true
+    # yellow_approach_area_ratio_threshold（黄线接近面积阈值）：黄色面积超过该值但未达到停车阈值时进入减速。
+    yellow_approach_area_ratio_threshold: 0.01
+    # yellow_approach_speed（黄线接近速度，m/s）：黄线接近阶段的线速度上限。
+    yellow_approach_speed: 0.12
+    # yellow_stop_confirm_frames（黄线停车确认帧数）：连续多少帧达到停车阈值后才真正停车，越大越抗误检。
+    yellow_stop_confirm_frames: 3
+    # yellow_clear_area_ratio_threshold（黄线离开面积阈值）：黄色面积低于该值后，允许下一条黄线重新触发。
+    yellow_clear_area_ratio_threshold: 0.008
+    # yellow_detection_cooldown（黄线计数冷却时间，秒）：防止同一条黄线被连续重复计数。
+    yellow_detection_cooldown: 3.5
+    # yellow_slow_count（第 N 次黄线后启用限速）：达到该黄线计数后进入慢速模式。
+    yellow_slow_count: 10
+    # yellow_slow_speed（黄线慢速模式最大速度，m/s）：慢速模式下的线速度上限。
+    yellow_slow_speed: 0.3
+    # yellow_resume_yaw_rate（黄线停车后恢复转向角速度，rad/s）：停车结束后短暂施加的 yaw，正值通常表示左转。
+    yellow_resume_yaw_rate: 0.5
+    # yellow_resume_yaw_duration（恢复转向持续时间，秒）：yellow_resume_yaw_rate 生效多久。
+    yellow_resume_yaw_duration: 0.5
+    # yellow_resume_yaw_count（恢复转向应用次数）：前 N 次黄线停车后应用恢复转向，0 表示禁用。
+    yellow_resume_yaw_count: 4
+    # yellow_resume_yaw_sequence（每次黄线后的恢复转向序列）：按黄线序号覆盖 yaw；空列表则使用 yellow_resume_yaw_rate。
+    yellow_resume_yaw_sequence: [0.0, 0.0, 0.0, 0.0]
+    # yellow_stop_duration（黄线停车持续时间，秒）：检测到黄线后保持完全停止的时间。
+    yellow_stop_duration: 0.8
+    # yellow_permanent_count（第 N 次黄线后永久停车）：0 表示关闭旧版永久停车；终点停车优先使用 enable_finish_stop。
+    yellow_permanent_count: 0
+    # enable_finish_stop（启用终点停车）：默认关闭，确认终点结构后再开启。
+    enable_finish_stop: false
+    # finish_stop_mode（终点停车模式）：当前支持 yellow_count，表示按第 N 次黄线/停车线触发。
+    finish_stop_mode: "yellow_count"
+    # finish_stop_yellow_count（终点停车黄线序号）：第 N 次确认黄线后触发终点停车，0 表示不按计数触发。
+    finish_stop_yellow_count: 0
+    # finish_stop_area_ratio_threshold（终点停车黄色面积阈值）：用于要求终点线足够明显，减少误停。
+    finish_stop_area_ratio_threshold: 0.05
+    # finish_stop_confirm_frames（终点停车确认帧数）：连续多少帧满足终点条件后才锁定停车。
+    finish_stop_confirm_frames: 3
+    # finish_stop_hold_forever（终点停车是否永久保持）：true 时触发后持续向 /cmd_vel_stop 发布零速度。
+    finish_stop_hold_forever: true
+    # enable_intersection_probe（启用交叉口探针）：通过 ROI 顶部暗区比例粗略判断交叉口，默认关闭。
+    enable_intersection_probe: false
+    # intersection_band_height（交叉口检测带高度，像素）：在 ROI 顶部取多高的区域做探测。
+    intersection_band_height: 50
+    # intersection_dark_ratio_threshold（交叉口暗区比例阈值）：暗区占比超过该值时触发交叉口转向。
+    intersection_dark_ratio_threshold: 1.0
+    # intersection_turn_speed（交叉口转向前进速度，m/s）：交叉口固定转向时的线速度。
+    intersection_turn_speed: 0.2
+    # intersection_turn_yaw_rate（交叉口转向角速度，rad/s）：交叉口固定转向时的 angular.z。
+    intersection_turn_yaw_rate: 1.8
+    # intersection_turn_duration（交叉口转向持续时间，秒）：交叉口固定转向保持多久。
+    intersection_turn_duration: 2.0
+    # intersection_cooldown（交叉口冷却时间，秒）：触发一次交叉口动作后多久内不再触发。
+    intersection_cooldown: 2.0
+    # red_divider_angle_deg（红色避障分界线角度，度）：判断红色目标在线左右侧时的角度补偿。
+    red_divider_angle_deg: 8.0
+
+    # enable_red_filter（启用红色检测/避障）：检测到足够大的红色区域后，按其在线左/右侧选择反向避让。
+    enable_red_filter: true
+    # red_h_low_1（红色第一段 Hue 下界）：红色在 HSV 中跨 0 度，因此分两段检测。
+    red_h_low_1: 0
+    # red_h_high_1（红色第一段 Hue 上界）：第一段通常覆盖 0 附近红色。
+    red_h_high_1: 10
+    # red_h_low_2（红色第二段 Hue 下界）：第二段通常覆盖 160-180 附近红色。
+    red_h_low_2: 160
+    # red_h_high_2（红色第二段 Hue 上界）：OpenCV HSV Hue 最大为 180。
+    red_h_high_2: 180
+    # red_s_min（红色最小 Saturation 饱和度）：过滤低饱和度非红色区域。
+    red_s_min: 100
+    # red_v_min（红色最小 Value 亮度）：过滤过暗区域，暗光下过高可能漏检。
+    red_v_min: 80
+    # red_area_ratio_threshold（红色面积比例阈值）：红色区域占比超过该值才认为有效。
+    red_area_ratio_threshold: 0.02
+    # red_min_contour_area（红色最小轮廓面积）：过滤小红点、反光等噪声；看到红色不避让可适当降低。
+    red_min_contour_area: 80.0
+    # red_turn_yaw（红色避障转向角速度，rad/s）：检测到红色目标后施加的转向强度。
+    red_turn_yaw: 0.3
+    # red_turn_linear（红色避障前进速度，m/s）：红色避障动作期间的线速度。
+    red_turn_linear: 0.4
+    # red_turn_duration（红色避障持续时间，秒）：红色避障动作保持多久。
+    red_turn_duration: 0.2
+    # red_vote_frames（红色检测投票帧数）：连续多少帧确认后触发，降低单帧误检。
+    red_vote_frames: 3
+    # red_cooldown（红色避障冷却时间，秒）：一次避障结束后多久内不再次触发，减少左右抖动。
+    red_cooldown: 0.6
+    # red_debug_overlay（红色避障调试叠加）：true 时在调试图上显示红色质心、分界线和避让方向。
+    red_debug_overlay: true
+
+    # line_lost_stop_time（丢线停车等待时间，秒）：连续丢线超过该时间后发布停车命令。
+    line_lost_stop_time: 0.8
+    # speed_gain_damping（基于误差的速度阻尼）：线偏差越大速度越低，值越大降速越明显。
+    speed_gain_damping: 0.5
+
+    # publish_debug_image（发布调试图像）：true 时输出带检测叠加的 debug image，便于调参。
+    publish_debug_image: true
+
+ros_yolo_detector:
+  ros__parameters:
+    # model_path（YOLOv8 模型权重路径）：数字识别模型 best_yolov8.pt 的绝对路径。
+    model_path: "/home/pavs-akm/zzh_space/TIS-smart_car-main/yolov5/best_yolov8.pt"
+    # image_topic（YOLO 图像输入话题）：数字识别节点订阅的相机彩色图像。
+    image_topic: "/camera/color/image_raw"
+    # detection_topic（YOLO 检测输出话题）：发布 Detection2DArray，供 detection_turn_controller 使用。
+    detection_topic: "/hobot_dnn_detection"
+    # conf_threshold（YOLO 置信度阈值）：低于该分数的数字框会被过滤；漏检多可降低，误检多可提高。
+    conf_threshold: 0.15
+    # iou_threshold（YOLO NMS 阈值）：控制重叠检测框合并，通常保持默认即可。
+    iou_threshold: 0.45
+    # skip_frames（跳帧数量）：每隔 skip_frames+1 帧推理一次；延迟高可降低，算力不足可提高。
+    skip_frames: 2
+    # target_digits（目标数字类别）：只发布这些类别的检测结果。
+    target_digits: ["1", "2", "3", "4", "5", "6", "7", "8", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
+    # publish_placeholder（发布空检测占位）：true 时未检测到数字也发布 99999 占位，兼容现有检测控制器。
+    publish_placeholder: true
+
+detection_turn_controller:
+  ros__parameters:
+    # detection_topic（检测结果输入话题）：YOLOv8 发布的 Detection2DArray 检测结果。
+    detection_topic: "hobot_dnn_detection"
+    # state_topic（巡线状态输入话题）：用于感知当前是否 tracking、lost 等。
+    state_topic: "line_follower/track_state"
+    # cmd_vel_topic（检测转向输出话题）：检测转向控制器发布的中优先级速度命令。
+    cmd_vel_topic: "/cmd_vel_detection"
+    # det_frame_width（检测图像宽度，像素）：用于把检测框坐标归一化。
+    det_frame_width: 640
+    # det_frame_height（检测图像高度，像素）：用于把检测框坐标归一化。
+    det_frame_height: 480
+    # confidence_threshold（检测置信度阈值）：低于该分数的 YOLO 检测会被忽略。
+    confidence_threshold: 0.1
+
+    # frame_window（检测窗口帧数）：累计若干帧后再触发转向，降低误检风险。
+    frame_window: 4
+    # class_vote_window（类别投票窗口）：只统计最近多少个与巡线质心对齐的数字类别。
+    class_vote_window: 4
+    # same_class_required（同类确认次数）：同一数字至少出现多少次才允许触发检测转向。
+    same_class_required: 2
+    # turn_cooldown（转向冷却时间，秒）：一次检测转向结束后多久内不再触发新转向。
+    turn_cooldown: 0.4
+    # turn_duration（检测转向持续时间，秒）：触发后发布 /cmd_vel_detection 的持续时间。
+    turn_duration: 0.7
+    # turn_linear（检测转向线速度，m/s）：检测转向期间小车前进速度。
+    turn_linear: 0.4
+    # yaw_gain（检测转向增益）：检测框相对巡线质心的横向偏差到 yaw 的放大系数。
+    yaw_gain: 1.8
+    # max_yaw_rate（检测转向最大角速度，rad/s）：限制检测转向输出的 angular.z。
+    max_yaw_rate: 1.5
+    # turn_direction_sign（转向方向符号）：用于修正左右方向，若检测转向反向可改符号。
+    turn_direction_sign: -1.0
+    # y_align_tolerance（纵向对齐容差）：检测框和巡线质心 y 方向差值小于该值才认为可触发。
+    y_align_tolerance: 0.05
+    # line_centroid_topic（巡线质心输入话题）：检测转向需要用它判断目标在线的左侧还是右侧。
+    line_centroid_topic: "line_follower/centroid"
+    # centroid_timeout（质心超时时间，秒）：超过该时间没有新质心则忽略检测转向。
+    centroid_timeout: 0.5
+
+cmd_mux_node:
+  ros__parameters:
+    # stop_topic（最高优先级停车话题）：收到有效停车命令时，最终 /cmd_vel 输出停车。
+    stop_topic: "/cmd_vel_stop"
+    # stop_timeout（停车命令有效时间，秒）：最近一次 stop 命令在该时间内保持最高优先级。
+    stop_timeout: 0.5
+    # high_topic（中优先级命令话题）：当前用于 YOLO/检测转向命令。
+    high_topic: "/cmd_vel_detection"
+    # high_timeout（中优先级命令有效时间，秒）：检测转向命令超过该时间未更新则失效。
+    high_timeout: 2.0
+    # low_topic（低优先级命令话题）：当前用于普通巡线命令。
+    low_topic: "/cmd_vel_follower"
+    # output_topic（最终底盘速度话题）：MUX 仲裁后发布到该话题，由底盘驱动执行。
+    output_topic: "/cmd_vel"
+    # session_cooldown（会话冷却参数）：预留/配置项，用于限制某些会话类触发频率。
+    session_cooldown: 2.0

@@ -1,0 +1,15 @@
+yolo_node:
+  ros__parameters:
+    ultralytics_dir: "src/yolo_cam/yolo_cam/YOLOv8"
+    model_path: "best.pt"
+    task: "detect"
+    device: "auto"
+    confidence_threshold: 0.4
+    input_topic: "camera/image_raw"
+    detections_topic: "yolo/detections"
+    annotated_image_topic: "yolo/image"
+    publish_annotated_image: true
+    log_fps: true
+    imgsz: 640
+    max_det: 100
+    half: false

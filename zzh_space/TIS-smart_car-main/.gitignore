@@ -1,0 +1,34 @@
+# Build directories
+build/
+install/
+log/
+*.pyc
+__pypy__/
+
+# ROS specific
+*.order
+*~
+.DS_Store
+
+# Python
+*.egg-info/
+dist/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Large files
+*.bag
+*.db
+
+# Temporary files
+*.tmp
+*.temp
+# Backup files
+*.bak
+*.old
