@@ -90,11 +90,11 @@ line_follower_node:
     # yellow_permanent_count（第 N 次黄线后永久停车）：0 表示关闭旧版永久停车；终点停车优先使用 enable_finish_stop。
     yellow_permanent_count: 0
     # enable_finish_stop（启用终点停车）：默认关闭，确认终点结构后再开启。
-    enable_finish_stop: false
+    enable_finish_stop: true
     # finish_stop_mode（终点停车模式）：当前支持 yellow_count，表示按第 N 次黄线/停车线触发。
     finish_stop_mode: "yellow_count"
     # finish_stop_yellow_count（终点停车黄线序号）：第 N 次确认黄线后触发终点停车，0 表示不按计数触发。
-    finish_stop_yellow_count: 0
+    finish_stop_yellow_count: 2
     # finish_stop_area_ratio_threshold（终点停车黄色面积阈值）：用于要求终点线足够明显，减少误停。
     finish_stop_area_ratio_threshold: 0.05
     # finish_stop_confirm_frames（终点停车确认帧数）：连续多少帧满足终点条件后才锁定停车。
