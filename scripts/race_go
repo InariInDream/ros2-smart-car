@@ -1,0 +1,81 @@
+#!/bin/bash
+# race_go — 一键发车: 在车上直接跑, 从启动到小车开动目标 < 60s
+# 用法:
+#   bash ~/bin/race_go            # 完整流程并立即发车
+#   bash ~/bin/race_go --no-start # 只拉起所有节点不发车(桌面测试用)
+# 幂等: 已在运行的组件自动跳过, 可反复执行
+# 日志: ~/race_logs/<时间戳>.log (持久保存, 重启不丢)
+
+source /opt/ros/humble/setup.bash
+source ~/ws_livox/install/setup.bash 2>/dev/null
+source ~/Pav-S_ws/install/setup.bash 2>/dev/null
+set -u
+
+DO_START=1
+[ "${1:-}" = "--no-start" ] && DO_START=0
+
+LOG_DIR=~/race_logs
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/race_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG") 2>&1
+
+T0=$SECONDS
+say() { echo "[$((SECONDS-T0))s] $*"; }
+
+run_bg() {  # run_bg <标识名> <pgrep匹配串> <命令...>
+  local name="$1" pat="$2"; shift 2
+  if pgrep -f "$pat" >/dev/null; then
+    say "[skip] $name 已在运行"
+  else
+    nohup "$@" >"$LOG_DIR/${name}.log" 2>&1 </dev/null &
+    say "[ok]   $name 已启动"
+  fi
+}
+
+wait_frame() {  # wait_frame <话题> <超时秒>: 阻塞到第一帧数据到达(真就绪探测)
+  local t="$1" n="${2:-15}"
+  if timeout "$n" ros2 topic echo --once "$t" >/dev/null 2>&1; then
+    say "[ok]   $t 有数据了"
+  else
+    say "[warn] 等 $t 超时(${n}s), 继续往下走"
+    return 1
+  fi
+}
+
+# ---------- 1. 底盘 + 相机(并行启动, 互不依赖) ----------
+say "[1/4] 底盘 + 相机"
+run_bg base base_serial ros2 launch turn_on_wheeltec_robot base_serial.launch.py
+run_bg camera astro_pro_plus ros2 launch astra_camera astro_pro_plus.launch.xml
+
+# 相机是后续一切的输入, 必须等真帧; 底盘串口初始化快, 等 2s 足够
+wait_frame /camera/color/image_raw 20
+sleep 2
+
+# ---------- 2. YOLO 数字识别(模型加载慢, 后台加载不阻塞发车) ----------
+say "[2/4] YOLOv8 (后台加载, 不阻塞)"
+PARAMS=~/zzh_space/TIS-smart_car-main/line_follow_ws/src/line_follower/config/line_follower_params.yaml
+run_bg yolo ros_yolo_detect python3 ~/zzh_space/TIS-smart_car-main/yolov5/ros_yolo_detect_v8.py --ros-args --params-file "$PARAMS"
+
+# ---------- 3. 巡线节点组(follower + 检测转向 + cmd_mux) ----------
+say "[3/4] 巡线节点"
+set +u
+source ~/zzh_space/TIS-smart_car-main/line_follow_ws/install/setup.bash
+set -u
+run_bg line line_follower_with_yolo ros2 launch line_follower line_follower_with_yolo.launch.py params_file:="$PARAMS"
+
+# ---------- 4. 发车 ----------
+if [ "$DO_START" = "1" ]; then
+  say "[4/4] 等待巡线节点就绪并发车..."
+  # -w 1: 等到有订阅者匹配才发布, 同时充当"节点就绪"探测; 超时说明节点没起来
+  if timeout 30 ros2 topic pub --once -w 1 --qos-reliability reliable \
+      /line_follower/start_cmd std_msgs/msg/Bool "{data: true}" >/dev/null 2>&1; then
+    say "[GO] 发车指令已送达! 总耗时 $((SECONDS-T0))s"
+  else
+    say "[err] 发车失败: 巡线节点 30s 内没就绪, 查 $LOG_DIR/line.log"
+    exit 1
+  fi
+else
+  say "[4/4] --no-start 模式, 不发车。发车执行: bash ~/bin/car-ctl line_start"
+fi
+
+say "日志: $LOG"

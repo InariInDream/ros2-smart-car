@@ -1,0 +1,215 @@
+#!/bin/bash
+# car-ctl — 小车比赛常用操作一键脚本（非交互、幂等、可反复执行）
+# 用法: bash ~/bin/car-ctl <命令> [参数]
+# 日志: /tmp/car_<名称>.log
+
+source /opt/ros/humble/setup.bash
+source ~/ws_livox/install/setup.bash 2>/dev/null
+source ~/Pav-S_ws/install/setup.bash 2>/dev/null
+
+set -u
+
+export DISPLAY=:0
+export XAUTHORITY=/run/user/1000/gdm/Xauthority
+
+# ---------- 工具函数 ----------
+# 后台启动: run_bg <标识名> <pgrep匹配串> <命令...>
+run_bg() {
+  local name="$1" pat="$2"; shift 2
+  if pgrep -f "$pat" >/dev/null; then
+    echo "[skip] $name 已在运行"
+  else
+    nohup "$@" >"/tmp/car_${name}.log" 2>&1 </dev/null &
+    echo "[ok]   $name 已启动 (日志 /tmp/car_${name}.log)"
+  fi
+}
+
+wait_topic() {  # wait_topic <话题名> <超时秒>
+  local t="$1" n="${2:-10}" i
+  for i in $(seq 1 "$n"); do
+    ros2 topic list 2>/dev/null | grep -qx "$t" && return 0
+    sleep 1
+  done
+  echo "[warn] 等待话题 $t 超时" >&2
+  return 1
+}
+
+pub_twist() { # pub_twist <linear_x> <angular_z> <次数/频率时长>
+  ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
+    "{linear: {x: $1, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: $2}}" >/dev/null 2>&1
+}
+
+# ---------- 各操作 ----------
+cmd_status() {
+  echo "== 进程 =="
+  pgrep -af "base_serial|turn_on_wheeltec|livox_ros_driver2.*launch|astra_camera|fast_lio|nav2|slam_toolbox|line_follower|ros_yolo|map_server|rviz2|x11vnc" | grep -v "pgrep\|car-ctl" || echo "(无)"
+  echo "== 话题 =="
+  ros2 topic list 2>/dev/null | grep -E "cmd_vel|odom|livox|scan|camera/color|map$" || echo "(无)"
+}
+
+cmd_base() {
+  run_bg base base_serial ros2 launch turn_on_wheeltec_robot base_serial.launch.py
+}
+
+cmd_bringup() {
+  run_bg bringup turn_on_wheeltec_robot.launch ros2 launch turn_on_wheeltec_robot turn_on_wheeltec_robot.launch.py
+}
+
+cmd_camera() {
+  run_bg camera astro_pro_plus ros2 launch astra_camera astro_pro_plus.launch.xml
+}
+
+cmd_lidar() {       # pointcloud2 格式（ros 开发/可视化用）
+  run_bg lidar msg_MID360_launch ros2 launch livox_ros_driver2 msg_MID360_launch.py
+}
+
+cmd_lidar_map() {   # custom_msg 格式（FAST-LIO 建图定位用）
+  run_bg lidar_map msg_MID360_map_launch ros2 launch livox_ros_driver2 msg_MID360_map_launch.py
+}
+
+cmd_view() { bash ~/start_view.sh; }
+
+cmd_teleop() {  # 需交互终端: car-ssh -t 后执行, 或直接 car-ssh
+  exec ros2 run teleop_twist_keyboard teleop_twist_keyboard
+}
+
+cmd_move() {  # move <线速度m/s> <角速度rad/s> [持续秒数, 默认1]
+  local lx="${1:?用法: move <linear_x> <angular_z> [秒]}" az="${2:?}" dur="${3:-1}"
+  echo "cmd_vel: linear.x=$lx angular.z=$az 持续 ${dur}s"
+  timeout "$dur" ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist \
+    "{linear: {x: $lx, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: $az}}" >/dev/null 2>&1
+  pub_twist 0.0 0.0
+  echo "已停止"
+}
+
+cmd_stop() {
+  for i in 1 2 3 4 5; do pub_twist 0.0 0.0; sleep 0.1; done
+  echo "已发送停车指令"
+}
+
+cmd_nav_demo() { # nav_demo <huan_dao|cha_lu|final>
+  local map="${1:?用法: nav_demo <huan_dao|cha_lu|final> [tf_x tf_y tf_z tf_yaw]}"
+  local yaml tf
+  case "$map" in
+    huan_dao) yaml=~/maps/huan_dao/map_huandao.yaml; tf="${2:-4.6} ${3:-0.85} ${4:-0.25} ${5:-3.1415926} 0 0" ;;
+    cha_lu)   yaml=~/maps/cha_lu/map_chalu.yaml;   tf="${2:-4.6} ${3:-0.77} ${4:-0.25} ${5:-3.1415926} 0 0" ;;
+    final)    yaml=~/maps/final/final.yaml;        tf="${2:-4.6} ${3:-0.77} ${4:-0.25} ${5:-3.1415926} 0 0" ;;
+    *) echo "未知地图: $map (可选 huan_dao/cha_lu/final)" >&2; exit 1 ;;
+  esac
+  echo "[1/7] 底盘";        cmd_base; sleep 3
+  echo "[2/7] 地图 $yaml"
+  run_bg map_server "map_server" ros2 run nav2_map_server map_server --ros-args -p yaml_filename:="$yaml" -p use_sim_time:=false
+  sleep 2
+  ros2 lifecycle set /map_server configure >/dev/null 2>&1
+  sleep 1
+  ros2 lifecycle set /map_server activate >/dev/null 2>&1
+  echo "      地图已激活"
+  echo "[3/7] 地图坐标系固定 TF: $tf map camera_init"
+  run_bg map_tf "map.*camera_init" ros2 run tf2_ros static_transform_publisher $tf map camera_init
+  echo "[4/7] FAST-LIO 定位"; run_bg fast_lio mapping.launch ros2 launch fast_lio mapping.launch.py; sleep 3
+  echo "[5/7] 点云转 scan"
+  run_bg p2ls pointcloud_to_laserscan ros2 launch pointcloud_to_laserscan sample_pointcloud_to_laserscan_launch.py
+  echo "[6/7] Nav2 导航";     run_bg nav2 navigation_launch ros2 launch nav2_bringup navigation_launch.py; sleep 3
+  echo "[7/7] 激光雷达(custom_msg, 最后启动避免定位延迟)"; cmd_lidar_map
+  echo "完成。rviz 里打开 ~/nav2_default_view.rviz 查看"
+}
+
+cmd_slam() {  # 在线建图导航 (slam_toolbox)
+  echo "[1/3] 完整底层(点云+轮式里程计)"; cmd_bringup; sleep 3
+  echo "[2/3] slam_toolbox 在线建图"
+  run_bg slam online_sync ros2 launch slam_toolbox online_sync_launch.py
+  echo "[3/3] 激光雷达(pointcloud2)"; cmd_lidar
+  echo "完成。建图后用: car-ctl slam_save <地图名>"
+}
+
+cmd_slam_save() {
+  local name="${1:?用法: slam_save <地图名>}"
+  mkdir -p ~/maps/"$name"
+  ros2 run nav2_map_server map_saver_cli -f ~/maps/"$name/$name" --ros-args -p map_subscribe_transient_local:=true \
+    && echo "地图已保存到 ~/maps/$name/"
+}
+
+cmd_line_follow() {  # 巡线比赛(非交互版 start_final)
+  echo "[1/4] 底盘";   cmd_base; sleep 3
+  echo "[2/4] 相机";   cmd_camera; sleep 5
+  echo "[3/4] YOLOv8 数字识别"
+  local root=~/zzh_space/TIS-smart_car-main
+  local params=$root/line_follow_ws/src/line_follower/config/line_follower_params.yaml
+  run_bg yolo ros_yolo_detect python3 "$root/yolov5/ros_yolo_detect_v8.py" --ros-args --params-file "$params"
+  sleep 3
+  echo "[4/4] 巡线节点"
+  set +u
+  source "$root/line_follow_ws/install/setup.bash"
+  set -u
+  run_bg line line_follower_with_yolo ros2 launch line_follower line_follower_with_yolo.launch.py params_file:="$params"
+  echo "完成。用 car-ctl line_start / line_stop 控制启停"
+}
+
+cmd_line_start() {
+  ros2 topic pub --once --qos-reliability reliable /line_follower/start_cmd std_msgs/msg/Bool "{data: true}" >/dev/null 2>&1 \
+    && echo "巡线已启动" || echo "发布失败(巡线节点未运行?)" >&2
+}
+
+cmd_line_stop() {
+  ros2 topic pub --once --qos-reliability reliable /line_follower/start_cmd std_msgs/msg/Bool "{data: false}" >/dev/null 2>&1 \
+    && echo "巡线已停止" || echo "发布失败(巡线节点未运行?)" >&2
+  cmd_stop
+}
+
+cmd_kill_all() {
+  pkill -f "base_serial|turn_on_wheeltec|livox_ros_driver2.*launch|astro_pro_plus|fast_lio|navigation_launch|slam_toolbox|line_follower|ros_yolo|map_server|pointcloud_to_laserscan|start_toggle|cmd_mux|detection_turn|image_compressor" 2>/dev/null
+  sleep 2
+  pkill -9 -f "base_serial|turn_on_wheeltec|livox_ros_driver2.*launch|astro_pro_plus|fast_lio|navigation_launch|slam_toolbox|line_follower|ros_yolo|map_server" 2>/dev/null
+  cmd_stop
+  echo "已清理全部比赛进程(rviz/x11vnc 保留)"
+}
+
+# ---------- 入口 ----------
+case "${1:-help}" in
+  status) cmd_status ;;
+  base) cmd_base ;;
+  bringup) cmd_bringup ;;
+  camera) cmd_camera ;;
+  lidar) cmd_lidar ;;
+  lidar_map) cmd_lidar_map ;;
+  view) cmd_view ;;
+  teleop) cmd_teleop ;;
+  move) shift; cmd_move "$@" ;;
+  stop) cmd_stop ;;
+  nav_demo) shift; cmd_nav_demo "$@" ;;
+  slam) cmd_slam ;;
+  slam_save) shift; cmd_slam_save "$@" ;;
+  line_follow) cmd_line_follow ;;
+  line_start) cmd_line_start ;;
+  line_stop) cmd_line_stop ;;
+  kill_all) cmd_kill_all ;;
+  *)
+    cat <<'EOF'
+car-ctl — 小车比赛常用操作（全部非交互、幂等）
+
+ 状态/基础:
+   status        查看进程和关键话题状态
+   base          启动底盘 (base_serial)
+   bringup       启动完整底层 (底盘+点云+轮式里程计+EKF)
+   camera        启动深度相机
+   lidar         启动雷达 pointcloud2 格式 (开发/可视化)
+   lidar_map     启动雷达 custom_msg 格式 (FAST-LIO 用)
+   kill_all      停止全部比赛进程
+   view          启动可视化 (雷达+相机+rviz+VNC)
+
+ 手动控制:
+   teleop        键盘遥控 (需在交互终端里跑)
+   move <lx> <az> [秒]   以指定速度运动, 默认1秒后自动停
+   stop          立即停车
+
+ 比赛流程:
+   nav_demo <huan_dao|cha_lu|final>   导航比赛 DEMO (FAST-LIO定位+Nav2)
+   slam          在线建图 (slam_toolbox)
+   slam_save <名字>   保存地图到 ~/maps/
+   line_follow   巡线比赛全流程 (底盘+相机+YOLO+巡线)
+   line_start / line_stop   巡线启停 (替代空格键)
+
+日志都在 /tmp/car_<名称>.log
+EOF
+    ;;
+esac
